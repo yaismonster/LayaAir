@@ -884,6 +884,92 @@ export class Mesh extends Resource implements IClone {
     //------------------------------------------NATIVE----------------------------------------------------
     /** @internal */
     _inverseBindPosesBuffer: ArrayBuffer;
+
+    //------------------------------------------Custom----------------------------------------------------
+
+    // author: yxx
+    // date: 2023年8月17日  
+    static createMesh(vertexDeclaration: VertexDeclaration, vertices: Float32Array, indices: Uint16Array): Mesh {
+		var mesh: Mesh = new Mesh();
+		var subMesh: SubMesh = new SubMesh(mesh);
+		var vertexBuffer: VertexBuffer3D = LayaGL.renderOBJCreate.createVertexBuffer3D(vertices.length * 4, BufferUsage.Static, true);
+		vertexBuffer.vertexDeclaration = vertexDeclaration;
+		vertexBuffer.setData(vertices.buffer);
+		mesh._vertexBuffer = vertexBuffer;
+		mesh._vertexCount = vertexBuffer._byteLength / vertexDeclaration.vertexStride;
+		var indexBuffer: IndexBuffer3D = LayaGL.renderOBJCreate.createIndexBuffer3D(IndexFormat.UInt16, indices.length, BufferUsage.Static, true);
+		indexBuffer.setData(indices);
+		mesh._indexBuffer = indexBuffer;
+
+		mesh._setBuffer(vertexBuffer, indexBuffer);
+		//mesh._setInstanceBuffer(mesh._instanceBufferStateType);
+		subMesh._vertexBuffer = vertexBuffer;
+		subMesh._indexBuffer = indexBuffer;
+		subMesh._setIndexRange(0, indexBuffer.indexCount);
+
+		var subIndexBufferStart: number[] = subMesh._subIndexBufferStart;
+		var subIndexBufferCount: number[] = subMesh._subIndexBufferCount;
+		var boneIndicesList: Uint16Array[] = subMesh._boneIndicesList;
+		subIndexBufferStart.length = 1;
+		subIndexBufferCount.length = 1;
+		boneIndicesList.length = 1;
+		subIndexBufferStart[0] = 0;
+		subIndexBufferCount[0] = indexBuffer.indexCount;
+
+		var subMeshes: SubMesh[] = [];
+		subMeshes.push(subMesh);
+		mesh._setSubMeshes(subMeshes);
+		mesh.calculateBounds();
+		var memorySize: number = vertexBuffer._byteLength + indexBuffer._byteLength;
+		mesh._setCPUMemory(memorySize);
+		mesh._setGPUMemory(memorySize);
+		return mesh;
+	}
+
+    // author: yxx
+    // date: 2023年8月17日
+    static updateMesh(mesh: Mesh,vertexDeclaration: VertexDeclaration, vertices: Float32Array, indices: Uint16Array): Mesh {
+		if(mesh._vertexBuffer._byteLength != vertices.length * 4){
+            mesh._vertexBuffer && mesh._vertexBuffer.destroy();
+
+			var vertexBuffer: VertexBuffer3D = LayaGL.renderOBJCreate.createVertexBuffer3D(vertices.length * 4, BufferUsage.Static, true);
+			vertexBuffer.vertexDeclaration = vertexDeclaration;
+			vertexBuffer.setData(vertices.buffer);
+
+			mesh._vertexBuffer = vertexBuffer;
+			mesh._vertexCount = vertexBuffer._byteLength / vertexDeclaration.vertexStride;
+
+			mesh._needUpdateBounds = true;
+		}else{
+			mesh.setVertices(vertices.buffer);
+		}
+		
+		mesh.setIndices(indices);
+		mesh._setBuffer(mesh._vertexBuffer, mesh._indexBuffer);
+
+        for (let i = 0; i < mesh.subMeshCount; i++) {
+            var subMesh: SubMesh = mesh._subMeshes[i];
+
+            subMesh._vertexBuffer = vertexBuffer;
+            subMesh._indexBuffer = mesh._indexBuffer;
+            subMesh._setIndexRange(0, mesh._indexBuffer.indexCount);
+
+            var subIndexBufferStart: number[] = subMesh._subIndexBufferStart;
+            var subIndexBufferCount: number[] = subMesh._subIndexBufferCount;
+            var boneIndicesList: Uint16Array[] = subMesh._boneIndicesList;
+            subIndexBufferStart.length = 1;
+            subIndexBufferCount.length = 1;
+            boneIndicesList.length = 1;
+            subIndexBufferStart[0] = 0;
+            subIndexBufferCount[0] = mesh._indexBuffer.indexCount;
+        }
+
+		mesh.calculateBounds();
+		var memorySize: number = mesh._vertexBuffer._byteLength + mesh._indexBuffer._byteLength;
+		mesh._setCPUMemory(memorySize);
+		mesh._setGPUMemory(memorySize);
+		return mesh;
+	}
 }
 
 
