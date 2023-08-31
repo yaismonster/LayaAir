@@ -1,4 +1,4 @@
-
+//hello
 import { Config3D } from "../../../Config3D";
 import { ILaya3D } from "../../../ILaya3D";
 import { Node } from "../../display/Node";
