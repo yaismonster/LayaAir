@@ -38,6 +38,25 @@ import { Vector3 } from "../../maths/Vector3";
 import { Vector4 } from "../../maths/Vector4";
 import { RenderTexture } from "../../resource/RenderTexture";
 import { Stat } from "../../utils/Stat";
+import { RendererBase } from "../../extensions/SRP/Runtime/RendererBase";
+import { Shader } from "../../webgl/shader/Shader";
+import { Scene } from "../../display/Scene";
+import { LayaEnv } from "../../../LayaEnv";
+
+/**
+ * 相机数据
+ */
+export class CameraData {
+    enableHDR: boolean;
+    shader: Shader3D;
+    replacementTag: string;
+    viewport: Viewport;
+    renderTex: RenderTexture;
+    invertY: boolean;
+    enableShadowCaster: boolean;
+    needShadowCasterPass: boolean;
+    spotneedShadowCasterPass: boolean;
+}
 
 /**
  * 相机清除标记。
@@ -59,20 +78,29 @@ export enum CameraClearFlags {
  * 相机事件标记
  */
 export enum CameraEventFlags {
-    //BeforeDepthTexture,
-    //AfterDepthTexture,
+    BeforeRendering = 0,
+    BeforeRenderingShadows = 50,
+    AfterRenderingShadows = 100,
+    BeforePrePasses = 150,
+    AfterPrePasses = 200,
+    BeforeDepthTexture = 210,
+    AfterDepthTexture = 220,
     //BeforeDepthNormalsTexture,
     //AfterDepthNormalTexture,
     /**在渲染非透明物体之前。*/
-    BeforeForwardOpaque = 0,
+    BeforeForwardOpaque = 250,
+    AfterForwardOpaque = 300,
     /**在渲染天空盒之前。*/
-    BeforeSkyBox = 2,
+    BeforeSkyBox = 350,
+    AfterSkybox = 400,
     /**在渲染透明物体之前。*/
-    BeforeTransparent = 4,
+    BeforeTransparent = 450,
+    AfterTransparent = 500,
     /**在后期处理之前。*/
-    BeforeImageEffect = 6,
+    BeforeImageEffect = 550,
+    AfterImageEffect = 600,
     /**所有渲染之后。*/
-    AfterEveryThing = 8,
+    AfterEveryThing = 1000,
 }
 
 /**
@@ -98,6 +126,9 @@ export class Camera extends BaseCamera {
     /** @internal 深度贴图管线*/
     static depthPass: DepthPass;
 
+    /** @internal 默认的渲染管线 */
+    static DefaultRenderer: RendererBase;
+
     /**
      * 根据相机、scene信息获得scene中某一位置的渲染结果
      * @param camera 相机
@@ -105,6 +136,7 @@ export class Camera extends BaseCamera {
      * @param shader 着色器
      * @param replacementTag 替换标记。
      */
+    //编辑器里也调用这个绘制rt，Camera里面调用这个函数的函数没有触发
     static drawRenderTextureByScene(camera: Camera, scene: Scene3D, renderTexture: RenderTexture, shader: Shader3D = null, replaceFlag: string = null): RenderTexture {
         if (!renderTexture) return null;
         Scene3D._updateMark++;
@@ -130,10 +162,7 @@ export class Camera extends BaseCamera {
             camera._internalRenderTexture = null;
         }
         scene._componentDriver.callPreRender();
-        var needShadowCasterPass: boolean = camera._renderShadowMap(scene, context);
-        camera._preRenderMainPass(context, scene, needInternalRT, viewport);
-        camera._renderMainPass(context, viewport, scene, shader, replaceFlag, needInternalRT);
-        camera._aftRenderMainPass(needShadowCasterPass);
+        camera.RenderCamera(context, scene, viewport, needInternalRT, shader, replaceFlag);
         camera.renderTarget = recoverTexture;
         scene.recaculateCullCamera();
         scene._componentDriver.callPostRender();
@@ -371,6 +400,14 @@ export class Camera extends BaseCamera {
     /**cache 上一帧纹理 */
     _cacheDepthTexture: RenderTexture;
 
+    private _cameraData: CameraData;
+    get cameraData(): CameraData {
+        if (this._cameraData == null) {
+            this._cameraData = new CameraData();
+        }
+        return this._cameraData;
+    }
+
     /**
      * 横纵比。
      */
@@ -397,6 +434,7 @@ export class Camera extends BaseCamera {
             this._calculationViewport(this._normalizedViewport, this._offScreenRenderTexture.width, this._offScreenRenderTexture.height);
         else
             this._calculationViewport(this._normalizedViewport, this.clientWidth, this.clientHeight);//屏幕尺寸会动态变化,需要重置
+
         return this._viewport;
     }
 
@@ -420,18 +458,28 @@ export class Camera extends BaseCamera {
 
     get clientWidth(): number {
         ILaya.stage.needUpdateCanvasSize();
+        let renderScale = 1.0;
+        if (this.Renderer != null) {
+            renderScale = this.Renderer.RenderScale
+        }
+        //渲染缩放的实现是在配置里的缩放系数 乘以 客户端宽高实现的，所以srp的renderscale在这里设置
         if (Config3D.customResolution)
-            return Config3D.pixelRatio * Config3D._resoluWidth | 0;
+            return Config3D.pixelRatio * Config3D._resoluWidth * renderScale | 0;
         else
-            return RenderContext3D.clientWidth * Config3D.pixelRatio | 0;
+            return RenderContext3D.clientWidth * Config3D.pixelRatio * renderScale | 0;
     }
 
     get clientHeight(): number {
         ILaya.stage.needUpdateCanvasSize();
+        let renderScale = 1.0;
+        if (this.Renderer != null) {
+            renderScale = this.Renderer.RenderScale
+        }
+        //渲染缩放的实现是在配置里的缩放系数 乘以 客户端宽高实现的，所以srp的renderscale在这里设置
         if (Config3D.customResolution)
-            return Config3D.pixelRatio * Config3D._resoluHeight | 0;
+            return Config3D.pixelRatio * Config3D._resoluHeight * renderScale | 0;
         else
-            return RenderContext3D.clientHeight * Config3D.pixelRatio | 0;
+            return RenderContext3D.clientHeight * Config3D.pixelRatio * renderScale | 0;
     }
 
 
@@ -1078,7 +1126,8 @@ export class Camera extends BaseCamera {
      * @param needInternalRT 是否需要内部RT
      */
     _renderMainPass(context: RenderContext3D, viewport: Viewport, scene: Scene3D, shader: Shader3D, replacementTag: string, needInternalRT: boolean) {
-        var renderTex: RenderTexture = this._getRenderTexture();//如果有临时renderTexture则画到临时renderTexture,最后再画到屏幕或者离屏画布,如果无临时renderTexture则直接画到屏幕或离屏画布
+        //如果有临时renderTexture则画到临时renderTexture,最后再画到屏幕或者离屏画布,如果无临时renderTexture则直接画到屏幕或离屏画布
+        var renderTex: RenderTexture = this._getRenderTexture();
         if (renderTex && renderTex._isCameraTarget)//保证反转Y状态正确
             context.invertY = true;
         else
@@ -1086,14 +1135,16 @@ export class Camera extends BaseCamera {
         context.viewport = viewport;
         //设置context的渲染目标
         context.destTarget = renderTex;
+        //设置shader参数
         this._prepareCameraToRender();
         var multiLighting: boolean = Config3D._multiLighting;
         (multiLighting) && (Cluster.instance.update(this, <Scene3D>(scene)));
 
         context.customShader = shader;
         context.replaceTag = replacementTag;
+        //预裁剪
         scene._preCulling(context, this);
-
+        //设置shader的相机参数
         this._applyViewProject(context, this.viewMatrix, this._projectionMatrix);
         if (this._cameraUniformData) {//需要在Depth之前更新数据
             this._cameraUniformUBO && this._cameraUniformUBO.setDataByUniformBufferData(this._cameraUniformData);
@@ -1101,28 +1152,34 @@ export class Camera extends BaseCamera {
         // if (this.depthTextureMode != 0) {
         //     //TODO:是否可以不多次
         this._renderDepthMode(context);
-        // }
 
         // todo layame temp
-        (renderTex) && (renderTex._start());
+        (renderTex) && (renderTex._start()); //like set render target
 
-
-        scene._clear(context);
-
+        scene._clear(context); // clear rendertarget
+        //run built in
+        //render before opaque
         this._applyCommandBuffer(CameraEventFlags.BeforeForwardOpaque, context);
 
         this.recoverRenderContext3D(context, renderTex);
+        //draw opaque
         Stat.enableOpaque && scene._renderScene(context, ILaya3D.Scene3D.SCENERENDERFLAG_RENDERQPAQUE);
         this._applyCommandBuffer(CameraEventFlags.BeforeSkyBox, context);
+        //copy color
         this._opaquePass && this._createOpaqueTexture(renderTex, context);
         this.recoverRenderContext3D(context, renderTex);
+        //draw sky box
         scene._renderScene(context, ILaya3D.Scene3D.SCENERENDERFLAG_SKYBOX);
+        //render before transparent
         this._applyCommandBuffer(CameraEventFlags.BeforeTransparent, context);
 
         this.recoverRenderContext3D(context, renderTex);
+        //draw transparent
         Stat.enableTransparent && scene._renderScene(context, ILaya3D.Scene3D.SCENERENDERFLAG_RENDERTRANSPARENT);
         //scene._componentDriver.callPostRender();//TODO:duo相机是否重复
+        //render before postprocess
         this._applyCommandBuffer(CameraEventFlags.BeforeImageEffect, context);
+
         (renderTex) && (renderTex._end());
 
         if (needInternalRT && Stat.enablePostprocess) {
@@ -1146,6 +1203,7 @@ export class Camera extends BaseCamera {
             RenderTexture.bindCanvasRender = null;
         } else
             RenderTexture.bindCanvasRender = this._internalRenderTexture;
+        // after rendering
         this._applyCommandBuffer(CameraEventFlags.AfterEveryThing, context);
 
         // if (renderTex && renderTex._isCameraTarget)//保证反转Y状态正确
@@ -1158,6 +1216,10 @@ export class Camera extends BaseCamera {
         context.changeViewport(cacheViewPor.x, cacheViewPor.y, cacheViewPor.width, cacheViewPor.height);
         context.changeScissor(cacheScissor.x, cacheScissor.y, cacheScissor.z, cacheScissor.w);
         context.destTarget = renderTexture;
+        //czh : fix engine bug in editor-- bind framebuffer.
+        if (!LayaEnv.isPlaying) {
+            context._contextOBJ.applyContext(Camera._updateMark);
+        }
     }
 
     /**
@@ -1259,7 +1321,6 @@ export class Camera extends BaseCamera {
         context.replaceTag = replacementTag;
         context.customShader = shader;
         let texFormat = this._getRenderTextureFormat();
-
         if (needInternalRT) {
             if (this.msaa) {
                 this._internalRenderTexture = RenderTexture.createFromPool(viewport.width, viewport.height, texFormat, this._depthTextureFormat, false, 4, this.canblitDepth, this._needRenderGamma(texFormat));
@@ -1273,10 +1334,7 @@ export class Camera extends BaseCamera {
             this._internalRenderTexture = null;
         }
         scene._componentDriver.callPreRender();
-        var needShadowCasterPass: boolean = this._renderShadowMap(scene, context);
-        this._preRenderMainPass(context, scene, needInternalRT, viewport);
-        this._renderMainPass(context, viewport, scene, shader, replacementTag, needInternalRT);
-        this._aftRenderMainPass(needShadowCasterPass);
+        this.RenderCamera(context, scene, viewport, needInternalRT, shader, replacementTag);
         scene._componentDriver.callPostRender();
     }
 
@@ -1430,5 +1488,96 @@ export class Camera extends BaseCamera {
 
     /** @internal [NATIVE]*/
     _boundFrustumBuffer: Float32Array;
-}
 
+
+    public get Renderer(): RendererBase {
+        return this._renderer;
+    }
+
+    public set Renderer(value: RendererBase) {
+        this._renderer = value;
+        if (this.name == "Main Camera") {
+            //设置默认管线
+            if (value == null) {
+                Camera.DefaultRenderer = null;
+            } else {
+                // let renderer = Object.assign(value) as RendererBase;
+                Camera.DefaultRenderer = value;
+            }
+        }
+    }
+    private _renderer: RendererBase;
+
+    private RenderSRP(context: RenderContext3D, scene: Scene3D, viewport: Viewport, needInternalRT: boolean, shader: Shader3D, replacementTag: string) {
+        this._setNeedShadowCaster(scene, this.cameraData);
+
+        var renderTex: RenderTexture = this._getRenderTexture();//如果有临时renderTexture则画到临时renderTexture,最后再画到屏幕或者离屏画布,如果无临时renderTexture则直接画到屏幕或离屏画布
+        if (renderTex && renderTex._isCameraTarget)//保证反转Y状态正确
+            this.cameraData.invertY = true;
+        else
+            this.cameraData.invertY = false;
+        this.cameraData.renderTex = renderTex;
+        this.cameraData.viewport = viewport;
+        //设置context的渲染目标
+        this.cameraData.renderTex = renderTex;
+        this.cameraData.shader = shader;
+        this.cameraData.replacementTag = replacementTag;
+        this.cameraData.enableHDR = this.enableHDR;
+
+
+        this.Renderer.Setup(context, scene, this.cameraData);
+        // execute renderer
+        this.Renderer.Execute(context, scene);
+    }
+
+    private RenderBuiltIn(context: RenderContext3D, scene: Scene3D, viewport: Viewport, needInternalRT: boolean, shader: Shader3D, replacementTag: string) {
+        var needShadowCasterPass: boolean = this._renderShadowMap(scene, context);
+        this._preRenderMainPass(context, scene, needInternalRT, viewport);
+        this._renderMainPass(context, viewport, scene, shader, replacementTag, needInternalRT);
+        this._aftRenderMainPass(needShadowCasterPass);
+    }
+
+    private RenderCamera(context: RenderContext3D, scene: Scene3D, viewport: Viewport, needInternalRT: boolean, shader: Shader3D, replacementTag: string) {
+        if (this.Renderer) {
+            if (this.name == "Editor Camera" && this.Renderer != Camera.DefaultRenderer) {
+                this.Renderer = Camera.DefaultRenderer;
+                return;
+            }
+            //calling srp
+            //setup renderer
+            //update camera;
+            this.Renderer.currentCamera = this;
+            this.RenderSRP(context, scene, viewport, needInternalRT, shader, replacementTag);
+        } else {
+            //TODO.
+            //Editor 的Camera没有在引擎里暴露出来，无法在底层修改管线，只能暂时在这里设置
+            if (this.name == "Editor Camera" && this.Renderer == null && Camera.DefaultRenderer != null) {
+                this.Renderer = Camera.DefaultRenderer;
+                return;
+            }
+            this.RenderBuiltIn(context, scene, viewport, needInternalRT, shader, replacementTag);
+        }
+    }
+
+    //封装渲染引擎的方法
+    copySubFrameBuffertoTex(texture: BaseTexture, level: number, xoffset: number, yoffset: number, x: number, y: number, width: number, height: number) {
+        this._renderEngine.copySubFrameBuffertoTex(texture, level, xoffset, yoffset, x, y, width, height);
+    }
+
+    private _setNeedShadowCaster(scene: Scene3D, cameraData: CameraData) {
+        if (Scene3D._updateMark % scene._ShadowMapupdateFrequency != 0) {
+            cameraData.needShadowCasterPass = false;
+            cameraData.spotneedShadowCasterPass = false;
+            return false;
+        }
+
+        var mainDirectLight: DirectionLightCom = scene._mainDirectionLight;
+        var needShadowCasterPass: boolean = mainDirectLight && mainDirectLight.shadowMode !== ShadowMode.None && ShadowUtils.supportShadow() && Stat.enableShadow;
+
+        var spotMainLight = scene._mainSpotLight;
+        var spotneedShadowCasterPass: boolean = spotMainLight && spotMainLight.shadowMode !== ShadowMode.None && ShadowUtils.supportShadow() && Stat.enableShadow;
+        cameraData.needShadowCasterPass = needShadowCasterPass;
+        cameraData.spotneedShadowCasterPass = spotneedShadowCasterPass;
+        return needShadowCasterPass || spotneedShadowCasterPass;
+    }
+}

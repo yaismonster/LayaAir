@@ -465,6 +465,10 @@ export class BaseRender extends Component implements IBoundsCell {
         }
     }
 
+    get shaderValues(): ShaderData{
+        return this._shaderValues;
+    }
+
     /**
      * 创建一个新的 <code>BaseRender</code> 实例。
      */

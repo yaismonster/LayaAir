@@ -13,6 +13,7 @@ import { ILaya3D } from "../../../../ILaya3D"
 import { ShaderInstance } from "../../../RenderEngine/RenderShader/ShaderInstance"
 import { ShaderPass } from "../../../RenderEngine/RenderShader/ShaderPass"
 import { SubShader } from "../../../RenderEngine/RenderShader/SubShader"
+import { RendererBase } from "../../../extensions/SRP/Runtime/RendererBase"
 
 /**
  * <code>RenderElement</code> 类用于实现渲染元素。
@@ -218,6 +219,19 @@ export class RenderElement {
         }
     }
 
+    _updateInRenderer(renderer: RendererBase, context: RenderContext3D, customShader: Shader3D, replacementTag: string, subshaderIndex: number = 0):void{
+        if (this.material) {//材质可能为空
+            this._convertSubShader(customShader, replacementTag, subshaderIndex);
+            if (!this.renderSubShader)
+                return;
+            var renderQueue = renderer._getRenderQueue(this.material.renderQueue);
+            if (renderQueue._isTransparent)
+                renderQueue.addRenderElement(this);
+            else
+                renderQueue.addRenderElement(this);
+        }
+    }
+
     /**
      * pre update data
      * @param context 
@@ -247,7 +261,7 @@ export class RenderElement {
             subUbo._needUpdate && BaseRender._transLargeUbO.updateSubData(subUbo);
         }
         //context.shader = this._renderElementOBJ._subShader;
-        this._renderElementOBJ._isRender = this._geometry._prepareRender(context);
+        this._renderElementOBJ._isRender = this._geometry._prepareRender(context); //是否需要渲染
         this._geometry._updateRenderParams(context);
         this.compileShader(context._contextOBJ);
         this._renderElementOBJ._invertFront = this.getInvertFront();
